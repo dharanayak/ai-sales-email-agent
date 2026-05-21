@@ -1,0 +1,344 @@
+{
+  "name": "AI Sales Email Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 9
+            }
+          ]
+        }
+      },
+      "id": "node-schedule-trigger",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [240, 300],
+      "notes": "Runs every day at 9:00 AM. Use the Test workflow button to run manually."
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Sheet1",
+          "mode": "name"
+        },
+        "filtersUI": {
+          "values": [
+            {
+              "lookupColumn": "Status",
+              "lookupValue": "pending"
+            }
+          ]
+        },
+        "options": {
+          "returnFirstMatch": false
+        }
+      },
+      "id": "node-read-leads",
+      "name": "Read Leads from Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [460, 300],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_GOOGLE_SHEETS_CREDENTIAL_ID",
+          "name": "Google Sheets account"
+        }
+      },
+      "notes": "Reads all rows where Status = pending. Replace YOUR_GOOGLE_SHEET_ID with your actual sheet ID from the URL."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false
+          },
+          "conditions": [
+            {
+              "id": "condition-email-check",
+              "leftValue": "={{ $json.Email }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "node-if-valid",
+      "name": "Valid Lead Check",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [680, 300],
+      "notes": "Safety check — only processes rows that have an email address. Skips blank rows silently."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"claude-sonnet-4-20250514\",\n  \"max_tokens\": 400,\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"Write a cold email to {{ $json.Name }}, who is {{ $json.Role }} at {{ $json.Company }}.\\n\\nRules:\\n- Max 5 sentences\\n- Open with a reference to their company\\n- Mention ONE specific pain point for their role\\n- End with a soft CTA: suggest a 15-minute call\\n- Tone: professional but human, not salesy\\n- Format: first line must be exactly 'Subject: [your subject]' then a blank line then the email body only. No extra commentary.\"\n    }\n  ]\n}",
+        "options": {}
+      },
+      "id": "node-claude-api",
+      "name": "Claude API - Write Email",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [900, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "YOUR_CLAUDE_CREDENTIAL_ID",
+          "name": "Claude API Key"
+        }
+      },
+      "notes": "Credential must have Header Name = x-api-key and Value = your Anthropic API key from console.anthropic.com"
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.content[0].text;\nconst lines = raw.split('\\n');\n\nlet subject = '';\nlet bodyLines = [];\nlet pastSubject = false;\n\nfor (const line of lines) {\n  if (!pastSubject && line.toLowerCase().startsWith('subject:')) {\n    subject = line.replace(/^subject:/i, '').trim();\n    pastSubject = true;\n  } else if (pastSubject) {\n    bodyLines.push(line);\n  }\n}\n\nconst body = bodyLines.join('\\n').trim();\n\nreturn [{\n  json: {\n    emailSubject: subject,\n    emailBody: body,\n    leadName: $('Read Leads from Sheet').first().json.Name,\n    leadEmail: $('Read Leads from Sheet').first().json.Email,\n    leadCompany: $('Read Leads from Sheet').first().json.Company,\n    leadRole: $('Read Leads from Sheet').first().json.Role,\n    rowNumber: $('Read Leads from Sheet').first().json.row_number\n  }\n}];"
+      },
+      "id": "node-parse-email",
+      "name": "Parse Email Content",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 300],
+      "notes": "Splits Claude response into Subject and Body. Carries lead data forward for Gmail and Notion nodes."
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.leadEmail }}",
+        "subject": "={{ $json.emailSubject }}",
+        "emailType": "text",
+        "message": "={{ $json.emailBody }}",
+        "options": {
+          "replyTo": "your-email@gmail.com"
+        }
+      },
+      "id": "node-gmail-send",
+      "name": "Gmail - Send Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2,
+      "position": [1340, 300],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "YOUR_GMAIL_CREDENTIAL_ID",
+          "name": "Gmail account"
+        }
+      },
+      "notes": "Replace your-email@gmail.com in replyTo with your actual address."
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Sheet1",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "row_number": "={{ $json.rowNumber }}",
+            "Status": "sent",
+            "SentDate": "={{ $now.toFormat('yyyy-MM-dd HH:mm') }}",
+            "Subject": "={{ $json.emailSubject }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "node-update-sheet",
+      "name": "Update Sheet Status",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [1560, 180],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_GOOGLE_SHEETS_CREDENTIAL_ID",
+          "name": "Google Sheets account"
+        }
+      },
+      "notes": "Marks lead as sent and saves date + subject. Prevents duplicate emails on next run."
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "create",
+        "databaseId": {
+          "__rl": true,
+          "value": "YOUR_NOTION_DATABASE_ID",
+          "mode": "id"
+        },
+        "title": "={{ $json.leadName }} — {{ $json.leadCompany }}",
+        "propertiesUi": {
+          "propertyValues": [
+            {
+              "key": "Status",
+              "type": "select",
+              "selectValue": "Sent"
+            },
+            {
+              "key": "Email",
+              "type": "email",
+              "emailValue": "={{ $json.leadEmail }}"
+            },
+            {
+              "key": "Role",
+              "type": "richText",
+              "textValue": "={{ $json.leadRole }}"
+            },
+            {
+              "key": "Company",
+              "type": "richText",
+              "textValue": "={{ $json.leadCompany }}"
+            },
+            {
+              "key": "Subject",
+              "type": "richText",
+              "textValue": "={{ $json.emailSubject }}"
+            },
+            {
+              "key": "SentDate",
+              "type": "date",
+              "dateValue": "={{ $now.toISO() }}"
+            }
+          ]
+        }
+      },
+      "id": "node-notion-log",
+      "name": "Log to Notion",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2,
+      "position": [1560, 420],
+      "credentials": {
+        "notionApi": {
+          "id": "YOUR_NOTION_CREDENTIAL_ID",
+          "name": "Notion account"
+        }
+      },
+      "notes": "Replace YOUR_NOTION_DATABASE_ID with your Notion DB id (found in the database URL)."
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Read Leads from Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Leads from Sheet": {
+      "main": [
+        [
+          {
+            "node": "Valid Lead Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid Lead Check": {
+      "main": [
+        [
+          {
+            "node": "Claude API - Write Email",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Claude API - Write Email": {
+      "main": [
+        [
+          {
+            "node": "Parse Email Content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Email Content": {
+      "main": [
+        [
+          {
+            "node": "Gmail - Send Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gmail - Send Email": {
+      "main": [
+        [
+          {
+            "node": "Update Sheet Status",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Log to Notion",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": ""
+  },
+  "staticData": null,
+  "meta": {
+    "instanceId": "ai-sales-email-agent-v1"
+  },
+  "pinData": {},
+  "tags": [
+    { "name": "Gen AI" },
+    { "name": "Sales Automation" },
+    { "name": "Agentic AI" }
+  ]
+}
