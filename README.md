@@ -168,6 +168,6 @@ MIT — free to use, modify, and build on.
 ## 👤 Author
 
 **Dhara_Nayak**
-[Portfolio](https://yourwebsite.com)
+[Portfolio](https://github.com/dharanayak/)
 
 > Part of a Gen AI & Agentic AI portfolio. See my other projects on my profile.
